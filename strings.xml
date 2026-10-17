@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">JARVIS</string>
+    <string name="accessibility_description">Allows JARVIS to perform user-requested system navigation actions.</string>
+</resources>
