@@ -25,10 +25,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -49,7 +51,7 @@ import java.util.concurrent.TimeUnit
 private const val AI_ENDPOINT =
     "https://broad-art-b578faris-ai-bridge.faizanrazza840.workers.dev"
 
-private val client = OkHttpClient.Builder()
+private val httpClient = OkHttpClient.Builder()
     .connectTimeout(20, TimeUnit.SECONDS)
     .readTimeout(75, TimeUnit.SECONDS)
     .callTimeout(90, TimeUnit.SECONDS)
@@ -64,17 +66,17 @@ private data class Message(
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private var tts: TextToSpeech? = null
-    private var speechRecognizer: SpeechRecognizer? = null
+    private var recognizer: SpeechRecognizer? = null
     private var ttsReady = false
-    private var onRecognized: ((String) -> Unit)? = null
-    private var onSpeechState: ((String) -> Unit)? = null
+    private var recognizedCallback: ((String) -> Unit)? = null
+    private var speechStateCallback: ((String) -> Unit)? = null
 
     private val micPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
                 startListening()
             } else {
-                onSpeechState?.invoke("Microphone permission zaroori hai.")
+                speechStateCallback?.invoke("Microphone permission zaroori hai.")
             }
         }
 
@@ -84,41 +86,43 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
 
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+            recognizer = SpeechRecognizer.createSpeechRecognizer(this)
 
-            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            recognizer?.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
-                    onSpeechState?.invoke("Sun raha hoon…")
+                    speechStateCallback?.invoke("Sun raha hoon…")
                 }
 
                 override fun onBeginningOfSpeech() {
-                    onSpeechState?.invoke("Sun raha hoon…")
+                    speechStateCallback?.invoke("Sun raha hoon…")
                 }
 
                 override fun onRmsChanged(rmsdB: Float) = Unit
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
 
                 override fun onEndOfSpeech() {
-                    onSpeechState?.invoke("Samajh raha hoon…")
+                    speechStateCallback?.invoke("Samajh raha hoon…")
                 }
 
                 override fun onError(error: Int) {
-                    onSpeechState?.invoke(
+                    speechStateCallback?.invoke(
                         "Voice input nahi mila. Dobara try karo."
                     )
                 }
 
                 override fun onResults(results: Bundle?) {
-                    val text = results
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val spokenText = results
+                        ?.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
                         ?.firstOrNull()
                         .orEmpty()
 
-                    if (text.isNotBlank()) {
-                        onRecognized?.invoke(text)
+                    if (spokenText.isNotBlank()) {
+                        recognizedCallback?.invoke(spokenText)
                     }
 
-                    onSpeechState?.invoke("Ready")
+                    speechStateCallback?.invoke("Online • Ready")
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) = Unit
@@ -129,9 +133,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         setContent {
             JarvisApp(
                 speak = ::speak,
-                listen = { recognized, state ->
-                    onRecognized = recognized
-                    onSpeechState = state
+                listen = { onResult, onState ->
+                    recognizedCallback = onResult
+                    speechStateCallback = onState
 
                     if (
                         ContextCompat.checkSelfPermission(
@@ -145,7 +149,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     }
                 },
                 openApp = ::launchApp,
-                openSettings = ::openSettings,
+                openSettings = ::openSystemSettings,
                 performSystemAction = ::performSystemAction,
                 appNames = ::getLaunchableApps,
                 recentNotifications = ::getRecentNotifications
@@ -154,9 +158,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startListening() {
-        val recognizer = speechRecognizer ?: run {
-            onSpeechState?.invoke(
-                "Is phone par speech recognition available nahi hai."
+        val speechRecognizer = recognizer
+
+        if (speechRecognizer == null) {
+            speechStateCallback?.invoke(
+                "Is device par speech recognition available nahi hai."
             )
             return
         }
@@ -173,9 +179,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         try {
-            recognizer.startListening(intent)
+            speechRecognizer.startListening(intent)
         } catch (_: Exception) {
-            onSpeechState?.invoke("Voice start nahi ho payi.")
+            speechStateCallback?.invoke("Voice start nahi ho payi.")
         }
     }
 
@@ -187,6 +193,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             val language = prefs.getString("voice_language", "hi-IN") ?: "hi-IN"
 
             setTtsLanguage(language)
+            tts?.setSpeechRate(
+                prefs.getFloat("voice_rate", 1.0f).coerceIn(0.75f, 1.25f)
+            )
         }
     }
 
@@ -205,13 +214,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         val prefs = getSharedPreferences("jarvis_data", MODE_PRIVATE)
         val language = prefs.getString("voice_language", "hi-IN") ?: "hi-IN"
-        val rate = prefs.getFloat("voice_rate", 1.0f)
-            .coerceIn(0.75f, 1.25f)
+        val rate = prefs.getFloat("voice_rate", 1.0f).coerceIn(0.75f, 1.25f)
 
         setTtsLanguage(language)
         tts?.setSpeechRate(rate)
-
-        // Voice quality depends on the TTS voices installed on the phone.
         tts?.speak(
             text.take(2500),
             TextToSpeech.QUEUE_FLUSH,
@@ -238,18 +244,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun launchApp(packageName: String): Boolean {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             ?: return false
 
         return try {
-            startActivity(intent)
+            startActivity(launchIntent)
             true
         } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
             false
         }
     }
 
-    private fun openSettings(which: String) {
+    private fun openSystemSettings(which: String) {
         val intent = when (which) {
             "notifications" ->
                 Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
@@ -257,18 +265,23 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             "accessibility" ->
                 Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
 
-            "assistant" ->
+            "assistant" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val rm = getSystemService(RoleManager::class.java)
+                    val roleManager = getSystemService(RoleManager::class.java)
 
-                    if (rm.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
-                        rm.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
+                    if (roleManager != null &&
+                        roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)
+                    ) {
+                        roleManager.createRequestRoleIntent(
+                            RoleManager.ROLE_ASSISTANT
+                        )
                     } else {
                         Intent(Settings.ACTION_SETTINGS)
                     }
                 } else {
                     Intent(Settings.ACTION_SETTINGS)
                 }
+            }
 
             "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
             "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
@@ -277,31 +290,38 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         try {
-            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            startActivity(intent)
         } catch (_: Exception) {
-            startActivity(Intent(Settings.ACTION_SETTINGS))
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (_: Exception) {
+                // Settings app unavailable.
+            }
         }
     }
 
     private fun performSystemAction(action: String): Boolean {
-        val service = JarvisAccessibilityService.activeService
-            ?: return false
+        val service = JarvisAccessibilityService.activeService ?: return false
 
         return when (action) {
             "back" -> service.performGlobalAction(
-                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
+                android.accessibilityservice.AccessibilityService
+                    .GLOBAL_ACTION_BACK
             )
 
             "home" -> service.performGlobalAction(
-                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME
+                android.accessibilityservice.AccessibilityService
+                    .GLOBAL_ACTION_HOME
             )
 
             "recents" -> service.performGlobalAction(
-                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS
+                android.accessibilityservice.AccessibilityService
+                    .GLOBAL_ACTION_RECENTS
             )
 
             "notifications" -> service.performGlobalAction(
-                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
+                android.accessibilityservice.AccessibilityService
+                    .GLOBAL_ACTION_NOTIFICATIONS
             )
 
             else -> false
@@ -313,16 +333,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             .getString("notifications", "[]")
 
         return try {
-            val arr = JSONArray(raw)
+            val array = JSONArray(raw)
 
-            (0 until minOf(arr.length(), 10)).map { i ->
-                val obj = arr.getJSONObject(i)
+            (0 until minOf(array.length(), 10)).mapNotNull { index ->
+                val obj = array.optJSONObject(index) ?: return@mapNotNull null
 
                 listOf(
                     obj.optString("title"),
                     obj.optString("text")
                 ).filter { it.isNotBlank() }
                     .joinToString(": ")
+                    .takeIf { it.isNotBlank() }
             }
         } catch (_: Exception) {
             emptyList()
@@ -330,9 +351,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-        speechRecognizer?.destroy()
+        recognizer?.destroy()
+        recognizer = null
         tts?.stop()
         tts?.shutdown()
+        tts = null
         super.onDestroy()
     }
 }
@@ -347,8 +370,12 @@ private fun JarvisApp(
     appNames: () -> List<Pair<String, String>>,
     recentNotifications: () -> List<String>
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    val prefs = remember {
+        context.getSharedPreferences("jarvis_data", Context.MODE_PRIVATE)
+    }
 
     var input by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
@@ -360,17 +387,12 @@ private fun JarvisApp(
     var voiceLanguage by remember { mutableStateOf("hi-IN") }
     var voiceRate by remember { mutableFloatStateOf(1.0f) }
 
-    val prefs = remember {
-        context.getSharedPreferences("jarvis_data", Context.MODE_PRIVATE)
-    }
-
     LaunchedEffect(Unit) {
         voiceLanguage = prefs.getString("voice_language", "hi-IN") ?: "hi-IN"
-        voiceRate = prefs.getFloat("voice_rate", 1.0f)
-            .coerceIn(0.75f, 1.25f)
+        voiceRate = prefs.getFloat("voice_rate", 1.0f).coerceIn(0.75f, 1.25f)
     }
 
-    val messages = remember {
+    val messages: SnapshotStateList<Message> = remember {
         mutableStateListOf<Message>().apply {
             val saved = try {
                 JSONArray(prefs.getString("chat_history", "[]"))
@@ -379,13 +401,12 @@ private fun JarvisApp(
             }
 
             for (i in 0 until minOf(saved.length(), 80)) {
-                val o = saved.optJSONObject(i) ?: continue
-
+                val obj = saved.optJSONObject(i) ?: continue
                 add(
                     Message(
-                        o.optString("text"),
-                        o.optBoolean("user"),
-                        o.optLong("time", System.currentTimeMillis())
+                        text = obj.optString("text"),
+                        user = obj.optBoolean("user"),
+                        time = obj.optLong("time", System.currentTimeMillis())
                     )
                 )
             }
@@ -401,31 +422,29 @@ private fun JarvisApp(
         }
     }
 
-    fun persist() {
-        val arr = JSONArray()
+    fun persistHistory() {
+        val array = JSONArray()
 
-        messages.takeLast(80).forEach {
-            arr.put(
+        messages.takeLast(80).forEach { message ->
+            array.put(
                 JSONObject()
-                    .put("text", it.text)
-                    .put("user", it.user)
-                    .put("time", it.time)
+                    .put("text", message.text)
+                    .put("user", message.user)
+                    .put("time", message.time)
             )
         }
 
-        prefs.edit()
-            .putString("chat_history", arr.toString())
-            .apply()
+        prefs.edit().putString("chat_history", array.toString()).apply()
     }
 
-    fun send(text: String) {
+    fun sendMessage(text: String) {
         val question = text.trim()
 
         if (question.isBlank() || loading) return
 
         input = ""
         messages.add(Message(question, true))
-        persist()
+        persistHistory()
 
         loading = true
         voiceState = "AI soch raha hai…"
@@ -445,7 +464,7 @@ private fun JarvisApp(
                         .post(body)
                         .build()
 
-                    client.newCall(request).execute().use { response ->
+                    httpClient.newCall(request).execute().use { response ->
                         val raw = response.body?.string().orEmpty()
 
                         val json = try {
@@ -458,7 +477,7 @@ private fun JarvisApp(
                             "AI service error (${response.code}): " +
                                 json.optString(
                                     "error",
-                                    "server check karna hoga"
+                                    raw.take(250).ifBlank { "Server error" }
                                 )
                         } else {
                             json.optString("reply")
@@ -474,7 +493,7 @@ private fun JarvisApp(
             }
 
             messages.add(Message(answer, false))
-            persist()
+            persistHistory()
 
             loading = false
             voiceState = "Online • Ready"
@@ -491,7 +510,7 @@ private fun JarvisApp(
         )
     ) {
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
@@ -504,11 +523,11 @@ private fun JarvisApp(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Box(
-                    Modifier
-                        .size(54.dp)
+                    modifier = Modifier
+                        .size(48.dp)
                         .background(
                             Brush.radialGradient(
                                 listOf(
@@ -533,11 +552,10 @@ private fun JarvisApp(
                     Text(
                         "J.A.R.V.I.S.",
                         color = Color(0xFF9CF3FF),
-                        fontSize = 24.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp
+                        letterSpacing = 1.5.sp
                     )
-
                     Text(
                         voiceState,
                         color = Color(0xFF8DA7C7),
@@ -548,6 +566,10 @@ private fun JarvisApp(
                 TextButton(
                     onClick = {
                         tab = if (tab == "chat") "control" else "chat"
+                        if (tab == "control") {
+                            apps = appNames()
+                            notifications = recentNotifications()
+                        }
                     }
                 ) {
                     Text(if (tab == "chat") "CONTROL" else "CHAT")
@@ -562,28 +584,4 @@ private fun JarvisApp(
 
             if (tab == "chat") {
                 LazyColumn(
-                    Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(messages) { msg ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = if (msg.user) {
-                                Arrangement.End
-                            } else {
-                                Arrangement.Start
-                            }
-                        ) {
-                            Surface(
-                                color = if (msg.user) {
-                                    Color(0xFF153D5A)
-                                } else {
-                                    Color(0xFF111D32)
-                                },
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.widthIn(max = 310.dp)
-                            ) {
-                                Text(
-                                    msg.text,
-                                    color = Color(0xFFEAF7FF),
-                    
+                  
