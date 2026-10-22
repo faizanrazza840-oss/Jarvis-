@@ -125,12 +125,31 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             ttsReady = true
-            tts?.language = Locale("hi", "IN")
+            val prefs = getSharedPreferences("jarvis_data", MODE_PRIVATE)
+            val language = prefs.getString("voice_language", "hi-IN") ?: "hi-IN"
+            setTtsLanguage(language)
         }
     }
 
+    private fun setTtsLanguage(language: String) {
+        val locale = when (language) {
+            "en-GB" -> Locale.UK
+            "en-IN" -> Locale("en", "IN")
+            else -> Locale("hi", "IN")
+        }
+        tts?.language = locale
+    }
+
     private fun speak(text: String) {
-        if (ttsReady) tts?.speak(text.take(2500), TextToSpeech.QUEUE_FLUSH, null, "jarvis_reply")
+        if (!ttsReady) return
+        val prefs = getSharedPreferences("jarvis_data", MODE_PRIVATE)
+        val language = prefs.getString("voice_language", "hi-IN") ?: "hi-IN"
+        val rate = prefs.getFloat("voice_rate", 1.0f).coerceIn(0.75f, 1.25f)
+        setTtsLanguage(language)
+        tts?.setSpeechRate(rate)
+        // Android uses the device's installed TTS voices. A British English voice is available
+        // only if the installed TTS engine provides one; this does not clone a movie actor.
+        tts?.speak(text.take(2500), TextToSpeech.QUEUE_FLUSH, null, "jarvis_reply")
     }
 
     private fun getLaunchableApps(): List<Pair<String, String>> {
@@ -213,7 +232,14 @@ private fun JarvisApp(
     var tab by remember { mutableStateOf("chat") }
     var apps by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var notifications by remember { mutableStateOf(emptyList<String>()) }
+    var showSettings by remember { mutableStateOf(false) }
+    var voiceLanguage by remember { mutableStateOf("hi-IN") }
+    var voiceRate by remember { mutableFloatStateOf(1.0f) }
     val prefs = remember { context.getSharedPreferences("jarvis_data", Context.MODE_PRIVATE) }
+    LaunchedEffect(Unit) {
+        voiceLanguage = prefs.getString("voice_language", "hi-IN") ?: "hi-IN"
+        voiceRate = prefs.getFloat("voice_rate", 1.0f).coerceIn(0.75f, 1.25f)
+    }
     val messages = remember {
         mutableStateListOf<Message>().apply {
             val saved = try { JSONArray(prefs.getString("chat_history", "[]")) } catch (_: Exception) { JSONArray() }
@@ -284,6 +310,7 @@ private fun JarvisApp(
                 TextButton(onClick = { tab = if (tab == "chat") "control" else "chat" }) {
                     Text(if (tab == "chat") "CONTROL" else "CHAT")
                 }
+                TextButton(onClick = { showSettings = true }) { Text("SETTINGS") }
             }
             Spacer(Modifier.height(12.dp))
             if (tab == "chat") {
@@ -337,25 +364,4 @@ private fun JarvisApp(
                     item { ControlCard("Home action", "Accessibility service enabled hona chahiye", "RUN") { voiceState = if (performSystemAction("home")) "Home action done" else "Pehle Accessibility Controls enable karo." } }
                     item { ControlCard("Back action", "Accessibility service enabled hona chahiye", "RUN") { voiceState = if (performSystemAction("back")) "Back action done" else "Pehle Accessibility Controls enable karo." } }
                     item { ControlCard("Recent apps", "Accessibility service enabled hona chahiye", "RUN") { voiceState = if (performSystemAction("recents")) "Recents opened" else "Pehle Accessibility Controls enable karo." } }
-                    item { ControlCard("Read recent notifications", "Notification access enable karne ke baad", "REFRESH") { notifications = recentNotifications() } }
-                    items(notifications) { line -> Text("• $line", color = Color(0xFFD5E9FA), modifier = Modifier.padding(8.dp)) }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text("JARVIS • Online AI • Local chat history", color = Color(0xFF607D9D), fontSize = 10.sp)
-        }
-    }
-}
-
-@Composable
-private fun ControlCard(title: String, subtitle: String, action: String, onClick: () -> Unit) {
-    Surface(color = Color(0xFF101B2F), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, color = Color.White, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, color = Color(0xFF8DA7C7), fontSize = 11.sp)
-            }
-            TextButton(onClick = onClick) { Text(action, color = Color(0xFF75EFFF), fontSize = 11.sp) }
-        }
-    }
-}
+                    item { ControlCard("Read recent notifications", "Notificatio
